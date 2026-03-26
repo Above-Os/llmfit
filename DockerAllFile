@@ -1,0 +1,41 @@
+FROM node:22-bookworm AS web
+WORKDIR /build/llmfit-web
+COPY llmfit-web/package.json llmfit-web/package-lock.json ./
+RUN npm ci
+COPY llmfit-web/ ./
+RUN npm run build
+
+FROM rust:1.88-slim AS builder
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY llmfit-core ./llmfit-core
+COPY llmfit-tui ./llmfit-tui
+COPY llmfit-desktop ./llmfit-desktop
+COPY data ./data
+COPY --from=web /build/llmfit-web/dist ./llmfit-web/dist
+
+RUN cargo build --release -p llmfit
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y \
+    pciutils \
+    lshw \
+    ca-certificates \
+    curl \
+    && (update-pciids || true) \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/llmfit /usr/local/bin/llmfit
+
+RUN useradd -m -u 1000 llmfit && \
+    chown llmfit:llmfit /usr/local/bin/llmfit
+
+USER llmfit
+
+ENTRYPOINT ["/usr/local/bin/llmfit"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8787"]
