@@ -45,6 +45,7 @@ struct ModelsQuery {
     include_too_tight: Option<bool>,
     max_context: Option<u32>,
     force_runtime: Option<String>,
+    license: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -376,6 +377,20 @@ fn filtered_fits(
 
     if let Some(use_case) = use_case_filter {
         fits.retain(|f| f.use_case == use_case);
+    }
+
+    if let Some(ref lic_str) = query.license {
+        let allowed: Vec<String> = lic_str
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .collect();
+        fits.retain(|f| {
+            f.model
+                .license
+                .as_ref()
+                .map(|l| allowed.contains(&l.to_lowercase()))
+                .unwrap_or(false)
+        });
     }
 
     let include_too_tight = query.include_too_tight.unwrap_or(!top_only);
