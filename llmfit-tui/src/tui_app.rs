@@ -26,6 +26,7 @@ pub enum InputMode {
     QuantPopup,
     RunModePopup,
     ParamsBucketPopup,
+    LicensePopup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,6 +258,7 @@ pub struct App {
     pub llamacpp_available: bool,
     pub llamacpp_installed: HashSet<String>,
     pub llamacpp_installed_count: usize,
+    pub llamacpp_detection_hint: String,
     llamacpp: LlamaCppProvider,
     pub docker_mr_available: bool,
     pub docker_mr_installed: HashSet<String>,
@@ -303,6 +305,11 @@ pub struct App {
     pub selected_params_buckets: Vec<bool>,
     pub params_bucket_cursor: usize,
 
+    // License filter (popup)
+    pub licenses: Vec<String>,
+    pub selected_licenses: Vec<bool>,
+    pub license_cursor: usize,
+
     // Theme
     pub theme: Theme,
 
@@ -329,6 +336,7 @@ impl App {
         // Detect llama.cpp
         let llamacpp = LlamaCppProvider::new();
         let llamacpp_available = llamacpp.is_available();
+        let llamacpp_detection_hint = llamacpp.detection_hint().to_string();
         let (llamacpp_installed, llamacpp_installed_count) = llamacpp.installed_models_counted();
 
         // Detect Docker Model Runner
@@ -423,6 +431,25 @@ impl App {
         ];
         let selected_params_buckets = vec![true; params_buckets.len()];
 
+        // Extract unique licenses (including "Unknown" for models without one)
+        let mut model_licenses: Vec<String> = all_fits
+            .iter()
+            .map(|f| {
+                f.model
+                    .license
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string())
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        // Move "Unknown" to the end if present
+        if let Some(pos) = model_licenses.iter().position(|l| l == "Unknown") {
+            let unknown = model_licenses.remove(pos);
+            model_licenses.push(unknown);
+        }
+        let selected_licenses = vec![true; model_licenses.len()];
+
         let filtered_count = all_fits.len();
 
         let (download_capability_tx, download_capability_rx) = mpsc::channel();
@@ -480,6 +507,7 @@ impl App {
             llamacpp_available,
             llamacpp_installed,
             llamacpp_installed_count,
+            llamacpp_detection_hint,
             llamacpp,
             docker_mr_available,
             docker_mr_installed,
@@ -511,6 +539,9 @@ impl App {
             params_buckets,
             selected_params_buckets,
             params_bucket_cursor: 0,
+            licenses: model_licenses,
+            selected_licenses,
+            license_cursor: 0,
             theme: Theme::load(),
             backend_hidden_count,
         };
@@ -542,14 +573,16 @@ impl App {
                         .collect::<Vec<_>>()
                         .join(" ");
                     // Combine all searchable fields into one string
+                    let license_text = fit.model.license.as_deref().unwrap_or("").to_lowercase();
                     let searchable = format!(
-                        "{} {} {} {} {} {}",
+                        "{} {} {} {} {} {} {}",
                         fit.model.name.to_lowercase(),
                         fit.model.provider.to_lowercase(),
                         fit.model.parameter_count.to_lowercase(),
                         fit.model.use_case.to_lowercase(),
                         fit.use_case.label().to_lowercase(),
-                        caps_text
+                        caps_text,
+                        license_text
                     );
                     // All terms must be present (AND logic)
                     terms.iter().all(|term| searchable.contains(term))
@@ -660,6 +693,20 @@ impl App {
 
                 let matches_tp = self.tp_filter.matches(&fit.model);
 
+                // License filter
+                let matches_license = {
+                    let all_selected = self.selected_licenses.iter().all(|&s| s);
+                    if all_selected || self.licenses.is_empty() {
+                        true
+                    } else {
+                        let model_lic = fit.model.license.as_deref().unwrap_or("Unknown");
+                        self.licenses
+                            .iter()
+                            .zip(self.selected_licenses.iter())
+                            .any(|(l, &sel)| sel && l == model_lic)
+                    }
+                };
+
                 matches_search
                     && matches_provider
                     && matches_use_case
@@ -670,6 +717,7 @@ impl App {
                     && matches_run_mode
                     && matches_params_bucket
                     && matches_tp
+                    && matches_license
             })
             .map(|(i, _)| i)
             .collect();
@@ -1393,6 +1441,45 @@ impl App {
         let all_selected = self.selected_params_buckets.iter().all(|&s| s);
         let new_val = !all_selected;
         for s in &mut self.selected_params_buckets {
+            *s = new_val;
+        }
+        self.apply_filters();
+    }
+
+    // ── License popup ───────────────────────────────────────────
+
+    pub fn open_license_popup(&mut self) {
+        self.input_mode = InputMode::LicensePopup;
+    }
+
+    pub fn close_license_popup(&mut self) {
+        self.input_mode = InputMode::Normal;
+    }
+
+    pub fn license_popup_up(&mut self) {
+        if self.license_cursor > 0 {
+            self.license_cursor -= 1;
+        }
+    }
+
+    pub fn license_popup_down(&mut self) {
+        if self.license_cursor + 1 < self.licenses.len() {
+            self.license_cursor += 1;
+        }
+    }
+
+    pub fn license_popup_toggle(&mut self) {
+        if self.license_cursor < self.selected_licenses.len() {
+            self.selected_licenses[self.license_cursor] =
+                !self.selected_licenses[self.license_cursor];
+            self.apply_filters();
+        }
+    }
+
+    pub fn license_popup_select_all(&mut self) {
+        let all_selected = self.selected_licenses.iter().all(|&s| s);
+        let new_val = !all_selected;
+        for s in &mut self.selected_licenses {
             *s = new_val;
         }
         self.apply_filters();
