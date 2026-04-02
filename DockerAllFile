@@ -22,12 +22,16 @@ COPY --from=web /build/llmfit-web/dist ./llmfit-web/dist
 RUN cargo build --release -p llmfit
 
 FROM debian:bookworm-slim
+# Best-effort NVIDIA userspace tools are installed below. On many hosts,
+# nvidia-container-runtime mounts host-provided binaries/libraries at runtime,
+# so this step is intentionally non-fatal for portability.
 RUN apt-get update && apt-get install -y \
     pciutils \
     lshw \
     ca-certificates \
     curl \
     && (update-pciids || true) \
+    && (apt-get install -y --no-install-recommends nvidia-smi || true) \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/llmfit /usr/local/bin/llmfit
